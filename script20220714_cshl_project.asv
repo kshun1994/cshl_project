@@ -133,7 +133,8 @@ orientations = linspace(0, 180, 1e3);
 
 % Parameters
 preferredOris   = rand(n, 1) .* max(orientations);
-spontaneousRate = ones(n, 1);                               % alpha
+spontaneousRate = normrnd(2, 1, [n 1]);                    % alpha
+spontaneousRate(spontaneousRate < 0) = 0;
 peakRate        = normrnd(15, 10, [n 1]) - spontaneousRate; % beta
 peakRate(peakRate < 0) = 0;
 widths          = datasample(2 .^ (0:0.25:3), n)';          % gamma
@@ -168,7 +169,7 @@ end
 
 %% Test model output
 
-testOri = [0 5]; % deg
+testOri = [0 1]; % deg
 testCon = 1;
 
 testStimuli.orientation = testOri;
@@ -203,6 +204,125 @@ title(lgd, 'Stimulus Orientation')
 
 %% Try discriminating whatever
 
+% Create decoder by subtracting unnoised responses from one another
+decoderData = FuncInputToModel(params, testStimuli);
+decoder = decoderData(:, 2) - decoderData(:, 1);
+
+% Normalize decoder to [-1, 1]
+decoder(decoder > 0) = decoder(decoder > 0) ./ max(decoder(:));
+decoder(decoder < 0) = decoder(decoder < 0) ./ abs(min(decoder(:)));
+
+figure
+scatter(preferredOris, decoder, 50, ...
+  'MarkerFaceColor', color.carrotOrange, 'MarkerEdgeColor', 'none', ...
+  'MarkerFaceAlpha', 0.75)
+title(sprintf('Population Decoder Weights (%g^o - %g^o)', ...
+  testStimuli.orientation(2), testStimuli.orientation(1)))
+xlabel(sprintf('Unit Preferred Orientation (^o)'))
+xlim([0 max(orientations)])
+xticks([linspace(0, max(orientations), 5)])
+ylabel('Weights')
+
+% Generate a bunch of trials
+nTrials = 1e4;
+trialNoise.type = 'Poisson';
+stimOri = repmat(testOri, [1 (nTrials / numel(testOri))]);
+
+% Generate model response
+trialResponses = FuncInputToModel(params, stimOri, trialNoise);
+
+% Get DVs using decoder
+dv = squeeze(sum(trialResponses .* decoder, 1));
+
+% Display DVs split between stimulus conditions
+figure
+hold on
+for i = 1:numel(unique(stimOri))
+
+  tStim = testOri(i);
+  tDV = dv(stimOri==tStim);
+
+  histogram(tDV, 'FaceColor', colors{i}, 'EdgeColor', 'none')
+
+end
+xline(median(dv), '--', 'Criterion', 'FontSize', 20)
+title(sprintf('Decision Variable Distribution (N = 10^{%g} trials)', ...
+  log10(nTrials)))
+xlabel('DV Value')
+ylabel('Count')
+lgd = legend(cellfun(@(x) sprintf('%g^o', x), num2cell(testOri), ...
+  'UniformOutput', false));
+title(lgd, 'Stimulus Orientation')
+
+%% Create a second population with global noise correlations
+
+paramsNC = params;
+noiseCorrMagnitude = 0.2;
+trialNoiseNC = trialNoise;
+
+R = eye(n);
+R(~R) = noiseCorrMagnitude;
+
+trialNoiseNC.correlationMatrix = R;
+
+% Test correlation with 0% contrast stimuli
+nTrials = 1e2;
+stimOri = zeros(1, nTrials);
+clear stimuli
+stimuli.orientation = stimOri;
+stimuli.contrast = 0;
+
+% Generate model response
+trialResponsesTest = FuncInputToModel(paramsNC, stimuli, trialNoiseNC);
+
+% Calculate correlations
+corrs = corr(trialResponsesTest');
+
+
+
+%% Do the same shit
+
+% Create decoder by subtracting unnoised responses from one another
+decoderData = FuncInputToModel(params, testStimuli);
+decoder = decoderData(:, 2) - decoderData(:, 1);
+
+% Normalize decoder to [-1, 1]
+decoder(decoder > 0) = decoder(decoder > 0) ./ max(decoder(:));
+decoder(decoder < 0) = decoder(decoder < 0) ./ abs(min(decoder(:)));
+
+% Generate a bunch of trials
+nTrials = 1e4;
+stimOri = repmat(testOri, [1 (nTrials / numel(testOri))]);
+clear stimuli
+stimuli.orientation = stimOri;
+stimuli.contrast = 0;
+
+% Generate model response
+trialResponsesNC = FuncInputToModel(paramsNC, stimuli, trialNoiseNC);
+
+% Get DVs using decoder
+dvNC = squeeze(sum(trialResponsesNC .* decoder, 1));
+
+% Display DVs split between stimulus conditions
+figure
+hold on
+for i = 1:numel(unique(stimOri))
+
+  tStim = testOri(i);
+  tDV = dvNC(stimOri==tStim);
+
+  histogram(tDV, 'FaceColor', colors{i}, 'EdgeColor', 'none')
+
+end
+xline(median(dvNC), '--', 'Criterion', 'FontSize', 20)
+title(sprintf(['Decision Variable Distribution ' ...
+  '(N = 10^{%g} trials)\nR_{NC} = %0.2f'], ...
+  log10(nTrials), noiseCorrMagnitude))
+xlabel('DV Value')
+ylabel('Count')
+lgd = legend(cellfun(@(x) sprintf('%g^o', x), num2cell(testOri), ...
+  'UniformOutput', false));
+title(lgd, 'Stimulus Orientation')
 
 
 %%
@@ -260,10 +380,10 @@ function unitOutput = FuncInputToUnit(param, stimulus)
   ori     = 2 .* ori;
   prefOri = 2 .* prefOri;
 
-  unitOutput = alpha + beta .* exp(gamma .* ...
+  unitOutput = alpha + beta .* con .* exp(gamma .* ...
     (cosd(repmat(ori, [size(param, 1) 1]) - prefOri) - 1));
 
-  unitOutput = unitOutput .* con;
+%   unitOutput = unitOutput;
 
 % unitOutput = alpha + ((2 .* beta) .* (exp(gamma .* cosd(ori - prefOri))) ...
 %   ./ (2 .* pi .* besseli(0, gamma)));
@@ -331,10 +451,48 @@ function modelOutput = FuncInputToModel(varargin)
 
     end
 
+    % Noise correlation stuff
+    % If correlation matrix isn't specified
+    if (~isfield(noiseParams, 'correlationMatrix'))
+  
+  %     % Assume no correlation if none is specified
+  %     R = eye(size(params, 1));
+  
+    else
+  
+      R = noiseParams.correlationMatrix;
+  
+      % Get Cholesky decomposition
+      L = chol(R);
+  
+      % Matrix multiply output by L
+      modelOutput = (modelOutput' * L)';
+  
+    end
+
   end
 
+%   % Don't bother doing the work if there are no correlations
+%   if (~all(R == 0))
+% 
+%   end
 
 end
+
+% corrMagnitude = 0.2;
+% mu = 50;
+% sigma = 5;
+% N = 3;
+% M = mu + sigma*randn(1000,N);
+% % R = [1 corrMagnitude corrMagnitude;corrMagnitude corrMagnitude 1];
+% R = eye(N);
+% R(~R) = corrMagnitude;
+% L = chol(R);
+% M = M*L;
+% x = M(:,1);
+% y = M(:,2);
+% % corr(x,y)
+% % corr(M(:,1), M(:,3))
 
 
 
