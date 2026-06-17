@@ -182,8 +182,8 @@ has about an R value of 0.2 to every other neuron in the population.
 ![Global Correlations](figures/9_dv-dist_global-noise-correlations.png)
 
 And now we can appreciate the appearance of a substantial overlap. Remember,
-our decoder will label any trials to the right of the criterion as "$90\degree$" 
-and any trials to the left as "$85\degree$." This means that a substantial
+our decoder will label any trials to the right of the criterion as " $90\degree$ " 
+and any trials to the left as " $85\degree$ ." This means that a substantial
 number of trials are being miscategorized by the decoder. Hopefully, this gives at 
 least the beginnings of an intuition for how this kind of noise correlation can
 seriously affect decoding accuracy.
